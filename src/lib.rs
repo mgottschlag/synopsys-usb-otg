@@ -2,11 +2,8 @@
 
 #![no_std]
 
-#[cfg(all(feature = "fs", feature = "hs"))]
-compile_error!("choose only one USB mode");
-
-#[cfg(not(any(feature = "fs", feature ="hs")))]
-compile_error!("select USB mode feature (fs/hs)");
+#[cfg(not(any(feature = "fs", feature = "hs")))]
+compile_error!("select USB mode feature (fs/hs/both)");
 
 mod endpoint;
 mod endpoint_memory;
@@ -16,7 +13,7 @@ mod target;
 /// USB peripheral driver.
 pub mod bus;
 
-pub use crate::bus::UsbBus;
+//pub use crate::bus::UsbBus;
 
 mod ral;
 mod transition;
@@ -44,7 +41,9 @@ pub unsafe trait UsbPeripheral: Send + Sync {
     fn ahb_frequency_hz(&self) -> u32;
 
     /// Returns PHY type that should be used for USB peripheral
-    fn phy_type(&self) -> PhyType { PhyType::InternalFullSpeed }
+    fn phy_type(&self) -> PhyType {
+        PhyType::InternalFullSpeed
+    }
 
     /// Performs initial setup of the internal high-speed PHY
     ///

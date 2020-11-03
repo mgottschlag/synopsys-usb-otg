@@ -1,25 +1,28 @@
-use usb_device::{Result, UsbError, UsbDirection};
-use usb_device::endpoint::EndpointAddress;
-use crate::endpoint_memory::{EndpointBuffer, EndpointBufferState};
-use crate::ral::{read_reg, write_reg, modify_reg, endpoint_in, endpoint_out, endpoint0_out};
-use crate::target::{fifo_write, UsbRegisters};
+// Macro to instantiate the whole implementation for both peripherals.
+macro_rules! endpoint_defs {
+    ($TYPE:ident) => {
+
+use crate::endpoint_memory::$TYPE::{EndpointBuffer, EndpointBufferState};
+use crate::ral::{modify_reg, read_reg, write_reg};
+use crate::ral::$TYPE::{endpoint0_out, endpoint_in, endpoint_out};
 use crate::target::interrupt::{self, CriticalSection, Mutex};
-use core::ops::{Deref, DerefMut};
-use core::cell::RefCell;
+use crate::target::$TYPE::{fifo_write, UsbRegisters};
 use crate::transition::EndpointDescriptor;
 use crate::UsbPeripheral;
+use core::cell::RefCell;
+use core::ops::{Deref, DerefMut};
+use usb_device::endpoint::EndpointAddress;
+use usb_device::{Result, UsbDirection, UsbError};
 
 pub fn set_stalled(usb: UsbRegisters, address: EndpointAddress, stalled: bool) {
-    interrupt::free(|_| {
-        match address.direction() {
-            UsbDirection::Out => {
-                let ep = usb.endpoint_out(address.index() as usize);
-                modify_reg!(endpoint_out, ep, DOEPCTL, STALL: stalled as u32);
-            },
-            UsbDirection::In => {
-                let ep = usb.endpoint_in(address.index() as usize);
-                modify_reg!(endpoint_in, ep, DIEPCTL, STALL: stalled as u32);
-            },
+    interrupt::free(|_| match address.direction() {
+        UsbDirection::Out => {
+            let ep = usb.endpoint_out(address.index() as usize);
+            modify_reg!(endpoint_out, ep, DOEPCTL, STALL: stalled as u32);
+        }
+        UsbDirection::In => {
+            let ep = usb.endpoint_in(address.index() as usize);
+            modify_reg!(endpoint_in, ep, DIEPCTL, STALL: stalled as u32);
         }
     })
 }
@@ -29,11 +32,11 @@ pub fn is_stalled(usb: UsbRegisters, address: EndpointAddress) -> bool {
         UsbDirection::Out => {
             let ep = usb.endpoint_out(address.index());
             read_reg!(endpoint_out, ep, DOEPCTL, STALL)
-        },
+        }
         UsbDirection::In => {
             let ep = usb.endpoint_in(address.index());
             read_reg!(endpoint_in, ep, DIEPCTL, STALL)
-        },
+        }
     };
     stall != 0
 }
@@ -48,7 +51,7 @@ impl Endpoint {
     pub fn new<USB: UsbPeripheral>(descriptor: EndpointDescriptor) -> Endpoint {
         Endpoint {
             descriptor,
-            usb: UsbRegisters::new::<USB>()
+            usb: UsbRegisters::new::<USB>(),
         }
     }
 
@@ -61,7 +64,6 @@ impl Endpoint {
         self.descriptor.address.index() as u8
     }
 }
-
 
 pub struct EndpointIn {
     common: Endpoint,
@@ -121,7 +123,7 @@ impl EndpointIn {
 
     pub fn write(&self, buf: &[u8]) -> Result<()> {
         let ep = self.usb.endpoint_in(self.index() as usize);
-        if self.index() != 0 && read_reg!(endpoint_in, ep, DIEPCTL, EPENA) != 0{
+        if self.index() != 0 && read_reg!(endpoint_in, ep, DIEPCTL, EPENA) != 0 {
             return Err(UsbError::WouldBlock);
         }
 
@@ -156,7 +158,10 @@ pub struct EndpointOut {
 }
 
 impl EndpointOut {
-    pub fn new<USB: UsbPeripheral>(descriptor: EndpointDescriptor, buffer: EndpointBuffer) -> EndpointOut {
+    pub fn new<USB: UsbPeripheral>(
+        descriptor: EndpointDescriptor,
+        buffer: EndpointBuffer,
+    ) -> EndpointOut {
         EndpointOut {
             common: Endpoint::new::<USB>(descriptor),
             buffer: Mutex::new(RefCell::new(buffer)),
@@ -205,18 +210,13 @@ impl EndpointOut {
     }
 
     pub fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        interrupt::free(|cs| {
-            self.buffer.borrow(cs).borrow_mut().read_packet(buf)
-        })
+        interrupt::free(|cs| self.buffer.borrow(cs).borrow_mut().read_packet(buf))
     }
 
     pub fn buffer_state(&self) -> EndpointBufferState {
-        interrupt::free(|cs| {
-            self.buffer.borrow(cs).borrow().state()
-        })
+        interrupt::free(|cs| self.buffer.borrow(cs).borrow().state())
     }
 }
-
 
 impl Deref for EndpointIn {
     type Target = Endpoint;
@@ -244,4 +244,18 @@ impl DerefMut for EndpointOut {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.common
     }
+}
+
+// End of macro
+    };
+}
+
+#[cfg(feature = "hs")]
+pub mod hs {
+    endpoint_defs!(hs);
+}
+
+#[cfg(feature = "fs")]
+pub mod fs {
+    endpoint_defs!(fs);
 }

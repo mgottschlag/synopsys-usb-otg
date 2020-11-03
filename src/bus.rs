@@ -1,14 +1,19 @@
+// Macro to instantiate the whole implementation for both peripherals.
+macro_rules! bus_defs {
+    ($TYPE:ident) => {
+
 use core::marker::PhantomData;
 use usb_device::{Result, UsbDirection, UsbError};
 use usb_device::bus::{UsbBusAllocator, PollResult};
 use usb_device::endpoint::{EndpointType, EndpointAddress};
 use crate::transition::{EndpointConfig, EndpointDescriptor};
-use crate::ral::{read_reg, write_reg, modify_reg, otg_global, otg_device, otg_pwrclk, otg_global_dieptxfx};
+use crate::ral::{read_reg, write_reg, modify_reg};
+use crate::ral::$TYPE::{otg_global, otg_device, otg_pwrclk, otg_global_dieptxfx};
 
-use crate::target::UsbRegisters;
+use crate::target::$TYPE::UsbRegisters;
 use crate::target::interrupt::{self, Mutex, CriticalSection};
-use crate::endpoint::{EndpointIn, EndpointOut};
-use crate::endpoint_memory::{EndpointMemoryAllocator, EndpointBufferState};
+use crate::endpoint::$TYPE::{EndpointIn, EndpointOut};
+use crate::endpoint_memory::$TYPE::{EndpointMemoryAllocator, EndpointBufferState};
 use crate::{UsbPeripheral, PhyType};
 
 /// USB peripheral driver for STM32 microcontrollers.
@@ -54,16 +59,7 @@ impl<USB: UsbPeripheral> UsbBus<USB> {
         // Tx FIFO #0
         let fifo_size = self.allocator.memory_allocator.tx_fifo_size_words(0);
 
-        #[cfg(feature = "fs")]
-        write_reg!(otg_global, regs.global(), DIEPTXF0,
-            TX0FD: fifo_size as u32,
-            TX0FSA: fifo_top as u32
-        );
-        #[cfg(feature = "hs")]
-        write_reg!(otg_global, regs.global(), GNPTXFSIZ,
-            TX0FD: fifo_size as u32,
-            TX0FSA: fifo_top as u32
-        );
+        init_fifo(regs, fifo_size as u32, fifo_top as u32);
 
         fifo_top += fifo_size;
 
@@ -262,55 +258,10 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
             while read_reg!(otg_global, regs.global(), GRSTCTL, AHBIDL) == 0 {}
 
             // Configure OTG as device
-            #[cfg(feature = "fs")]
-            modify_reg!(otg_global, regs.global(), GUSBCFG,
-                SRPCAP: 0, // SRP capability is not enabled
-                FDMOD: 1 // Force device mode
-            );
-            #[cfg(feature = "hs")]
-            modify_reg!(otg_global, regs.global(), GUSBCFG,
-                SRPCAP: 0, // SRP capability is not enabled
-                TOCAL: 0x1,
-                FDMOD: 1 // Force device mode
-            );
+            device_mode(regs);
 
             // Configure USB PHY
-            #[cfg(feature = "hs")]
-            match self.peripheral.phy_type() {
-                PhyType::InternalFullSpeed => {
-                    // Select FS Embedded PHY
-                    modify_reg!(otg_global, regs.global(), GUSBCFG, PHYSEL: 1);
-                },
-                PhyType::InternalHighSpeed => {
-                    // Turn off PHY
-                    modify_reg!(otg_global, regs.global(), GCCFG, PWRDWN: 0);
-
-                    // Init The UTMI Interface
-                    modify_reg!(otg_global, regs.global(), GUSBCFG,
-                        TSDPS: 0,
-                        ULPIFSLS: 0,
-                        PHYSEL: 0 // ULPI or UTMI
-                    );
-
-                    // Select vbus source
-                    modify_reg!(otg_global, regs.global(), GUSBCFG,
-                        ULPIEVBUSD: 0,
-                        ULPIEVBUSI: 0
-                    );
-
-                    // Select UTMI Interace
-                    //modify_reg!(otg_global, regs.global(), GUSBCFG, ULPISEL: 0);
-                    modify_reg!(otg_global, regs.global(), GUSBCFG, |r| r & !(1 << 4));
-
-                    // This is a secret bit from ST that is not mentioned anywhere except
-                    // the driver code shipped with STM32CubeIDE.
-                    //modify_reg!(otg_global, regs.global(), GCCFG, PHYHSEN: 1);
-                    modify_reg!(otg_global, regs.global(), GCCFG, |r| r | (1 << 23));
-
-                    self.peripheral.setup_internal_hs_phy();
-                }
-                PhyType::ExternalHighSpeed => unimplemented!()
-            }
+            configure_phy_type(regs, &mut self.peripheral);
 
             // Perform core soft-reset
             while read_reg!(otg_global, regs.global(), GRSTCTL, AHBIDL) == 0 {}
@@ -431,7 +382,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
         }
 
         let regs = UsbRegisters::new::<USB>();
-        crate::endpoint::set_stalled(regs, ep_addr, stalled)
+        crate::endpoint::$TYPE::set_stalled(regs, ep_addr, stalled)
     }
 
     fn is_stalled(&self, ep_addr: EndpointAddress) -> bool {
@@ -440,7 +391,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
         }
 
         let regs = UsbRegisters::new::<USB>();
-        crate::endpoint::is_stalled(regs, ep_addr)
+        crate::endpoint::$TYPE::is_stalled(regs, ep_addr)
     }
 
     fn suspend(&self) {
@@ -526,7 +477,7 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
                 let mut ep_in_complete = 0;
                 let mut ep_setup = 0;
 
-                use crate::ral::{endpoint_in, endpoint_out};
+                use crate::ral::$TYPE::{endpoint_in, endpoint_out};
 
                 // RXFLVL & IEPINT flags are read-only, there is no need to clear them
                 if rxflvl != 0 {
@@ -614,4 +565,89 @@ impl<USB: UsbPeripheral> usb_device::bus::UsbBus for UsbBus<USB> {
     }
 
     const QUIRK_SET_ADDRESS_BEFORE_STATUS: bool = true;
+}
+
+// End of macro
+    };
+}
+
+#[cfg(feature = "hs")]
+pub mod hs {
+    bus_defs!(hs);
+    fn configure_phy_type<USB: UsbPeripheral>(regs: &UsbRegisters, peripheral: &mut USB) {
+        match peripheral.phy_type() {
+            PhyType::InternalFullSpeed => {
+                // Select FS Embedded PHY
+                modify_reg!(otg_global, regs.global(), GUSBCFG, PHYSEL: 1);
+            }
+            PhyType::InternalHighSpeed => {
+                // Turn off PHY
+                modify_reg!(otg_global, regs.global(), GCCFG, PWRDWN: 0);
+
+                // Init The UTMI Interface
+                modify_reg!(otg_global, regs.global(), GUSBCFG,
+                    TSDPS: 0,
+                    ULPIFSLS: 0,
+                    PHYSEL: 0 // ULPI or UTMI
+                );
+
+                // Select vbus source
+                modify_reg!(otg_global, regs.global(), GUSBCFG,
+                    ULPIEVBUSD: 0,
+                    ULPIEVBUSI: 0
+                );
+
+                // Select UTMI Interace
+                //modify_reg!(otg_global, regs.global(), GUSBCFG, ULPISEL: 0);
+                modify_reg!(otg_global, regs.global(), GUSBCFG, |r| r & !(1 << 4));
+
+                // This is a secret bit from ST that is not mentioned anywhere except
+                // the driver code shipped with STM32CubeIDE.
+                //modify_reg!(otg_global, regs.global(), GCCFG, PHYHSEN: 1);
+                modify_reg!(otg_global, regs.global(), GCCFG, |r| r | (1 << 23));
+
+                peripheral.setup_internal_hs_phy();
+            }
+            PhyType::ExternalHighSpeed => unimplemented!(),
+        }
+    }
+    fn init_fifo(regs: &UsbRegisters, fifo_size: u32, fifo_top: u32) {
+        write_reg!(
+            otg_global,
+            regs.global(),
+            GNPTXFSIZ,
+            TX0FD: fifo_size as u32,
+            TX0FSA: fifo_top as u32
+        );
+    }
+    fn device_mode(regs: &UsbRegisters) {
+        modify_reg!(otg_global, regs.global(), GUSBCFG,
+            SRPCAP: 0, // SRP capability is not enabled
+            TOCAL: 0x1,
+            FDMOD: 1 // Force device mode
+        );
+    }
+}
+
+#[cfg(feature = "fs")]
+pub mod fs {
+    bus_defs!(fs);
+    fn configure_phy_type<USB: UsbPeripheral>(_regs: &UsbRegisters, _peripheral: &mut USB) {
+        // Nothing to do here, only full speed supported.
+    }
+    fn init_fifo(regs: &UsbRegisters, fifo_size: u32, fifo_top: u32) {
+        write_reg!(
+            otg_global,
+            regs.global(),
+            DIEPTXF0,
+            TX0FD: fifo_size,
+            TX0FSA: fifo_top
+        );
+    }
+    fn device_mode(regs: &UsbRegisters) {
+        modify_reg!(otg_global, regs.global(), GUSBCFG,
+            SRPCAP: 0, // SRP capability is not enabled
+            FDMOD: 1 // Force device mode
+        );
+    }
 }
